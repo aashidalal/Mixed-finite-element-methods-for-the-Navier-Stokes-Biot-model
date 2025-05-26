@@ -1,0 +1,1013 @@
+-- FreeFem++ v  3.590000 (date jue ago  9 19:33:35 -04 2018)
+ Load: lg_fem lg_mesh lg_mesh3 eigenvalue 
+    1 : //
+    2 : // This code solves a Banach spaces-based fully-mixed finite element method
+    3 : // for the Navier-Stokes-Biot model 
+    4 : //
+    5 : // authors: Sergio Caucao, Aashi Dalal, Tongtong Li, Ivan Yotov
+    6 : //
+    7 : // Global information
+    8 : load "iovtk" load: iovtk 
+;         // for saving data in paraview format
+    9 : load "UMFPACK64";     // UMFPACK solver
+   10 : load "Element_Mixte"; // for using BDM1
+   11 : //---------------------------------------------------------------------------------
+   12 : // 								Initial parameters
+   13 : //---------------------------------------------------------------------------------
+   14 : 
+   15 : //----- Global parameters
+   16 : int nref = 6;
+   17 : real tol, t;
+   18 : real T = 0.01;   //total time T=0.01; 
+   19 : real dt = 0.001;  //delta t=0.001;
+   20 : real NN = T/dt;  //number of time interval
+   21 : real[int] iterations(nref);
+   22 : real[int] auxitt(NN);   
+   23 : 
+   24 : //----- Navier-Stokes
+   25 : real[int] Tferror(nref);
+   26 : real[int] uferror(nref);
+   27 : real[int] ufinferror(nref);
+   28 : real[int] eauxuf(NN);   
+   29 : real[int] gamferror(nref);          
+   30 : real[int] pferror(nref);   
+   31 : real[int] hF(nref);   
+   32 : real[int] DOFf(nref);
+   33 : 
+   34 : //----- Biot
+   35 : real[int] sigperror(nref);
+   36 : real[int] eauxsigp(NN);
+   37 : real[int] uperror(nref);
+   38 : real[int] pperror(nref);
+   39 : real[int] eauxpp(NN);
+   40 : real[int] userror(nref);  
+   41 : real[int] etaperror(nref);  
+   42 : real[int] gamperror(nref);         
+   43 : real[int] hP(nref);  
+   44 : real[int] DOFp(nref);
+   45 : 
+   46 : //----- Interface
+   47 : real[int] vphierror(nref);
+   48 : real[int] thetaerror(nref);
+   49 : real[int] lamerror(nref);  
+   50 : real[int] htf(nref); 
+   51 : real[int] htp(nref); 
+   52 : 
+   53 : //----- rate of convergence
+   54 : real[int] Tfrate(nref-1);
+   55 : real[int] ufrate(nref-1);
+   56 : real[int] ufinfrate(nref-1);
+   57 : real[int] gamfrate(nref-1);
+   58 : real[int] pfrate(nref-1);
+   59 : 
+   60 : real[int] sigprate(nref-1);
+   61 : real[int] uprate(nref-1);
+   62 : real[int] pprate(nref-1);
+   63 : real[int] usrate(nref-1);
+   64 : real[int] etaprate(nref-1);
+   65 : real[int] gamprate(nref-1);
+   66 : 
+   67 : real[int] vphirate(nref-1);
+   68 : real[int] thetarate(nref-1);
+   69 : real[int] lamrate(nref-1);
+   70 : //---------------------------------------------------------------------------------
+   71 : //									 Global data
+   72 : //---------------------------------------------------------------------------------
+   73 : 
+   74 : //----- Navier-Stokes
+   75 : real mu = 1.;
+   76 : real rhof = 1.;
+   77 : 
+   78 : func pf  =  (2.*pi)*cos(pi*t) + exp(t)*sin(pi*x)*cos((pi/2.)*y);
+   79 : func pfx =  pi*exp(t)*cos(pi*x)*cos((pi/2.)*y);
+   80 : func pfy = -(pi/2.)*exp(t)*sin(pi*x)*sin((pi/2.)*y);
+   81 : 
+   82 : func uf1   =  exp(t)*sin(pi*x)*cos(pi*y);
+   83 : func uf2   = -exp(t)*cos(pi*x)*sin(pi*y); 
+   84 : func uf1x  =  pi*exp(t)*cos(pi*x)*cos(pi*y);
+   85 : func uf1y  = -pi*exp(t)*sin(pi*x)*sin(pi*y);
+   86 : func uf2x  =  pi*exp(t)*sin(pi*x)*sin(pi*y);
+   87 : func uf2y  = -uf1x;
+   88 : func uf1xx = -(pi^2)*exp(t)*sin(pi*x)*cos(pi*y);
+   89 : func uf1xy = -(pi^2)*exp(t)*cos(pi*x)*sin(pi*y);
+   90 : func uf1yy = -(pi^2)*exp(t)*sin(pi*x)*cos(pi*y);
+   91 : func uf2xx =  (pi^2)*exp(t)*cos(pi*x)*sin(pi*y);
+   92 : func uf2xy = -uf1xx;
+   93 : func uf2yy = -uf1xy;
+   94 : 
+   95 : func gamf  = (uf1y - uf2x)/2.;
+   96 : 
+   97 : func Tf1 = 2.*mu*uf1x - rhof*(uf1^2) - pf;
+   98 : func Tf2 = mu*(uf1y + uf2x) - rhof*(uf1*uf2);
+   99 : func Tf3 = Tf2;
+  100 : func Tf4 = 2.*mu*uf2y - rhof*(uf2^2) - pf;
+  101 : 
+  102 : func DivTf1 = mu*(2.*uf1xx + uf1yy + uf2xy) - rhof*(uf1x*uf1 + uf1y*uf2) - pfx;
+  103 : func DivTf2 = mu*(uf1xy + uf2xx + 2.*uf2yy) - rhof*(uf2x*uf1 + uf2y*uf2) - pfy;
+  104 : func ff1 = -DivTf1;
+  105 : func ff2 = -DivTf2;
+  106 : 
+  107 : //----- Biot
+  108 : real k1 = 1.; // matrix K=[[k1,k2],[k2,k3]]
+  109 : real k2 = 0.;
+  110 : real k3 = 1.;
+  111 : real s0 = 1.;
+  112 : real omi = 1.;
+  113 : real mup = 1.;
+  114 : real lamp = 1.;
+  115 : real trAI = (1./(mup+lamp));
+  116 : real lamup = lamp/(2.*(mup+lamp));
+  117 : real alphap = 1.;
+  118 : 
+  119 : func pp  =  exp(t)*sin(pi*x)*cos((pi/2.)*y);
+  120 : func ppx =  pi*exp(t)*cos(pi*x)*cos((pi/2.)*y);
+  121 : func ppy = -(pi/2.)*exp(t)*sin(pi*x)*sin((pi/2.)*y);
+  122 : func ppt =  exp(t)*sin(pi*x)*cos((pi/2.)*y);
+  123 : 
+  124 : func up1  = -(k1*ppx)/mu;
+  125 : func up2  = -(k3*ppy)/mu;
+  126 : func up1x =  ((k1*pi^2)/mu)*exp(t)*sin(pi*x)*cos((pi/2.)*y);
+  127 : func up2y =  ((k3*pi^2)/(4.*mu))*exp(t)*sin(pi*x)*cos((pi/2.)*y);
+  128 : 
+  129 : func etap1   =  sin(pi*t)*(-3.*x + cos(y));
+  130 : func etap2   =  sin(pi*t)*(y + 1.);
+  131 : func etap1x  = -3.*sin(pi*t);
+  132 : func etap1y  = -sin(pi*t)*sin(y);
+  133 : func etap2x  =  0.;
+  134 : func etap2y  =  sin(pi*t);
+  135 : func etap1xx =  0.;
+  136 : func etap1xy =  0.;
+  137 : func etap1yy = -sin(pi*t)*cos(y);
+  138 : func etap2xx =  0.;
+  139 : func etap2xy =  0.;
+  140 : func etap2yy =  0.;
+  141 : 
+  142 : func us1  = pi*cos(pi*t)*(-3.*x + cos(y));
+  143 : func us2  = pi*cos(pi*t)*(y + 1.);
+  144 : func us1x = -(3.*pi)*cos(pi*t);
+  145 : func us1y = -pi*cos(pi*t)*sin(y);
+  146 : func us2x = 0.;
+  147 : func us2y = pi*cos(pi*t);
+  148 : 
+  149 : func gamp  = (us1y - us2x)/2.;
+  150 : 
+  151 : func sigp1 = (lamp+2.*mup)*etap1x + lamp*etap2y - alphap*pp;
+  152 : func sigp2 = mup*(etap1y + etap2x);
+  153 : func sigp3 = sigp2;
+  154 : func sigp4 = lamp*etap1x + (lamp+2.*mup)*etap2y - alphap*pp;
+  155 : 
+  156 : func divetapt = -(2.*pi)*cos(pi*t);
+  157 : func divup = up1x + up2y;
+  158 : func gp  = s0*ppt + alphap*divetapt + divup;
+  159 : func fp1 = -((lamp+2.*mup)*etap1xx + (lamp+mup)*etap2xy + mup*etap1yy) + alphap*ppx;
+  160 : func fp2 = -((lamp+2.*mup)*etap2yy + (lamp+mup)*etap1xy + mup*etap2xx) + alphap*ppy;
+  161 : 
+  162 : //----- Global macros
+  163 :   macro uf[uf1,uf2] //
+  164 :   macro up[up1,up2] //
+  165 :   macro us[us1,us2] //
+  166 :   macro etap[etap1,etap2] //
+  167 :   macro Tf[Tf1,Tf2,Tf3,Tf4] //
+  168 :   macro DivTf[DivTf1,DivTf2] //
+  169 :   macro sigp[sigp1,sigp2,sigp3,sigp4] //
+  170 :   macro Ff[ff1,ff2] //
+  171 :   macro Fp[fp1,fp2] //
+  172 :   macro Ki[[k3/(k1*k3-k2^2),-k2/(k1*k3-k2^2)],[-k2/(k1*k3-k2^2),k1/(k1*k3-k2^2)]] //
+  173 : 
+  174 :   macro Tfh[Tfh1,Tfh2,Tfh3,Tfh4] //
+  175 :   macro Rfh[Rfh1,Rfh2,Rfh3,Rfh4] //
+  176 : 
+  177 :   macro ufh[ufh1,ufh2] //
+  178 :   macro vfh[vfh1,vfh2] //
+  179 :   macro wfh[wfh1,wfh2] //
+  180 : 
+  181 :   macro sigph[sigph1,sigph2,sigph3,sigph4] //
+  182 :   macro tauph[tauph1,tauph2,tauph3,tauph4] //
+  183 :   macro sigphold[sigphold1,sigphold2,sigphold3,sigphold4] //
+  184 : 
+  185 :   macro uph[uph1,uph2] //
+  186 :   macro vph[vph1,vph2] //
+  187 : 
+  188 :   macro ush[ush1,ush2] //
+  189 :   macro vsh[vsh1,vsh2] //
+  190 : 
+  191 :   macro etaph[etaph1,etaph2] //
+  192 : 
+  193 :   macro vphih[vphih1,vphih2] //
+  194 :   macro psih[psih1,psih2] //
+  195 :   macro wphih[wphih1,wphih2] //
+  196 : 
+  197 :   macro auxfh[auxfh1,auxfh2] //
+  198 :   macro xaufh[xaufh1,xaufh2] //
+  199 : 
+  200 :   macro thetah[thetah1,thetah2] //
+  201 :   macro phih[phih1,phih2] //
+  202 : 
+  203 :   macro norm[N.x,N.y] //
+  204 :    macro tgt[-N.y,N.x] //
+  205 : 
+  206 :  macro div(vph )   (dx(vph[0]) + dy(vph[1])) //
+  207 :  macro conv(ufh,wfh )   [0.5*(ufh[0]*wfh[0]-ufh[1]*wfh[1]),ufh[0]*wfh[1],ufh[1]*wfh[0],0.5*(ufh[1]*wfh[1]-ufh[0]*wfh[0])] //
+  208 :  macro tr(Rfh )   (Rfh[0] + Rfh[3]) // 
+  209 :  macro trA(tauph )   (tr(tauph)/(2.*(mup+lamp))) // 
+  210 :  macro dev(Rfh )   [0.5*(Rfh[0]-Rfh[3]),Rfh[1],Rfh[2],0.5*(Rfh[3]-Rfh[0])] //
+  211 :  macro Div(Rfh )   [dx(Rfh[0]) + dy(Rfh[1]),dx(Rfh[2]) + dy(Rfh[3])] //
+  212 :  macro A(tauph )   [(tauph[0]-lamup*tr(tauph))/(2.*mup),tauph[1]/(2.*mup),tauph[2]/(2.*mup),(tauph[3]-lamup*tr(tauph))/(2.*mup)] //
+  213 :  macro pfh(Rfh,vfh )   (-0.5*(tr(Rfh) + rhof*(vfh[0]^2+vfh[1]^2)) ) //
+  214 : //---------------------------------------------------------------------------------
+  215 : //	 							   Defining the domain
+  216 : //---------------------------------------------------------------------------------
+  217 : for(int n = 0; n < nref; n++){
+  218 : 
+  219 : int sizef = 2^(n + 3); 
+  220 : int sizep = (5./8.)*sizef;
+  221 : 
+  222 : int gammafp = 1;
+  223 : int gammafD = 21;
+  224 : int gammafN = 22;
+  225 : int gammapD = 31;
+  226 : int gammapN = 32;
+  227 : 
+  228 : //----- Omegaf
+  229 : border Gammaf1(t=0,1){x=1; y=t; label = gammafN;};
+  230 : border Gammaf2(t=1,0){x=t; y=1; label = gammafD;};
+  231 : border Gammaf3(t=1,0){x=0; y=t; label = gammafN;};
+  232 : 
+  233 : //----- Interface
+  234 : border Gammafp(t=0,1){x=t; y=0; label = gammafp;};
+  235 : 
+  236 : //----- Omegap
+  237 : border Gammap1(t=0,-1){x=0; y=t; label = gammapN;};
+  238 : border Gammap2(t=0,1){x=t; y=-1; label = gammapD;};
+  239 : border Gammap3(t=-1,0){x=1; y=t; label = gammapN;};
+  240 : 
+  241 : //----- Meshes
+  242 : mesh Thf = buildmesh(Gammaf1(sizef) + Gammaf2(sizef) + Gammaf3(sizef) + Gammafp(sizef));
+  243 : mesh Thp = buildmesh(Gammap1(sizep) + Gammap2(sizep) + Gammap3(sizep) + Gammafp(-sizep));
+  244 : 
+  245 : mesh Shf = emptymesh(Thf);
+  246 : mesh Shp = emptymesh(Thp);
+  247 : 
+  248 : //plot(Shf,wait=true);
+  249 : //               Gammaf^D   
+  250 : //           1-------------
+  251 : //           |            |
+  252 : //           |            |
+  253 : //  Gammaf^N |   Omegaf   |Gammaf^N
+  254 : //           |            |
+  255 : //           |            |         
+  256 : //           0------------1 Gammafp
+  257 : //           |            |
+  258 : //           |            |
+  259 : //  Gammap^N |   Omegap   |Gammap^N
+  260 : //           |            |
+  261 : //           |            |
+  262 : //          -1-------------
+  263 : //               Gammap^D
+  264 : 
+  265 : //plot(Thf,Thp,wait=true);
+  266 : //---------------------------------------------------------------------------------
+  267 : // 						Finite element spaces
+  268 : //---------------------------------------------------------------------------------
+  269 : fespace QhTf(Thf,[BDM1,BDM1]);
+  270 : fespace Qhup(Thp,BDM1);
+  271 : fespace Qhsigp(Thp,[BDM1,BDM1]);
+  272 : fespace Qhpp(Thp,P0);
+  273 : 
+  274 : fespace Shuf(Thf,[P0,P0]);
+  275 : fespace Shus(Thp,[P0,P0]);
+  276 : fespace Shgamf(Thf,P0);
+  277 : fespace Shgamp(Thp,P0);
+  278 : 
+  279 : fespace Lhf(Shf,[P1dc,P1dc]);
+  280 : fespace Lhs(Shp,[P1dc,P1dc]);
+  281 : fespace Lhp(Shp,P1dc);
+  282 : fespace Auxf(Shf,[P1dc,P1dc]);
+  283 : fespace Auxp(Shp,P1dc);
+  284 : 
+  285 : fespace Phf(Thf,P1);
+  286 : fespace Php(Thp,P1);
+  287 : //---------------------------------------------------------------------------------
+  288 : // 			      			Defining the bilinear forms 
+  289 : //---------------------------------------------------------------------------------
+  290 : QhTf  [Tfh1,Tfh2,Tfh3,Tfh4] ;
+  291 : Qhup  [uph1,uph2] ;
+  292 : Qhpp pph, pphold;
+  293 : Qhsigp  [sigph1,sigph2,sigph3,sigph4] ,  [sigphold1,sigphold2,sigphold3,sigphold4] ;
+  294 : Shuf  [ufh1,ufh2] , [wfh1,wfh2] ;
+  295 : Shus  [ush1,ush2] ;
+  296 : Shgamf gamfh;
+  297 : Shgamp gamph;
+  298 : Lhf  [vphih1,vphih2] , [wphih1,wphih2] ;
+  299 : Lhs  [thetah1,thetah2] ;
+  300 : Lhp lamh;
+  301 : 
+  302 : real eps  = 1.e-12;
+  303 : real epsI = 1.e-12;
+  304 : //----- bilinear forms
+  305 : varf a1( [Tfh1,Tfh2,Tfh3,Tfh4] , [Rfh1,Rfh2,Rfh3,Rfh4] )     = int2d(Thf)( (   [0.5*( [Tfh1,Tfh2,Tfh3,Tfh4] [0]- [Tfh1,Tfh2,Tfh3,Tfh4] [3]), [Tfh1,Tfh2,Tfh3,Tfh4] [1], [Tfh1,Tfh2,Tfh3,Tfh4] [2],0.5*( [Tfh1,Tfh2,Tfh3,Tfh4] [3]- [Tfh1,Tfh2,Tfh3,Tfh4] [0])] '*   [0.5*( [Rfh1,Rfh2,Rfh3,Rfh4] [0]- [Rfh1,Rfh2,Rfh3,Rfh4] [3]), [Rfh1,Rfh2,Rfh3,Rfh4] [1], [Rfh1,Rfh2,Rfh3,Rfh4] [2],0.5*( [Rfh1,Rfh2,Rfh3,Rfh4] [3]- [Rfh1,Rfh2,Rfh3,Rfh4] [0])] )/(2.*mu) - eps*(     ( [Tfh1,Tfh2,Tfh3,Tfh4] [0] +  [Tfh1,Tfh2,Tfh3,Tfh4] [3]) *     ( [Rfh1,Rfh2,Rfh3,Rfh4] [0] +  [Rfh1,Rfh2,Rfh3,Rfh4] [3]) ) );
+  306 : varf a2( [uph1,uph2] , [vph1,vph2] )     = int2d(Thp)( mu*(( [[k3/(k1*k3-k2^2),-k2/(k1*k3-k2^2)],[-k2/(k1*k3-k2^2),k1/(k1*k3-k2^2)]] * [uph1,uph2] )'* [vph1,vph2] ) );
+  307 : varf a3([pph], [vph1,vph2] )   = int2d(Thp)( -(pph*     (dx( [vph1,vph2] [0]) + dy( [vph1,vph2] [1])) ) );
+  308 : varf a4( [uph1,uph2] ,[qph])   = int2d(Thp)( qph*     (dx( [uph1,uph2] [0]) + dy( [uph1,uph2] [1]))  );
+  309 : varf a5( [sigph1,sigph2,sigph3,sigph4] , [tauph1,tauph2,tauph3,tauph4] ) = int2d(Thp)( (1./dt)*(   [( [sigph1,sigph2,sigph3,sigph4] [0]-lamup*     ( [sigph1,sigph2,sigph3,sigph4] [0] +  [sigph1,sigph2,sigph3,sigph4] [3]) )/(2.*mup), [sigph1,sigph2,sigph3,sigph4] [1]/(2.*mup), [sigph1,sigph2,sigph3,sigph4] [2]/(2.*mup),( [sigph1,sigph2,sigph3,sigph4] [3]-lamup*     ( [sigph1,sigph2,sigph3,sigph4] [0] +  [sigph1,sigph2,sigph3,sigph4] [3]) )/(2.*mup)] '* [tauph1,tauph2,tauph3,tauph4] ) );
+  310 : varf a6([pph], [tauph1,tauph2,tauph3,tauph4] ) = int2d(Thp)( (alphap/dt)*(pph*   (     ( [tauph1,tauph2,tauph3,tauph4] [0] +  [tauph1,tauph2,tauph3,tauph4] [3]) /(2.*(mup+lamp))) ) );
+  311 : varf a7( [sigph1,sigph2,sigph3,sigph4] ,[qph]) = int2d(Thp)( (alphap/dt)*(   (     ( [sigph1,sigph2,sigph3,sigph4] [0] +  [sigph1,sigph2,sigph3,sigph4] [3]) /(2.*(mup+lamp))) *qph) );
+  312 : varf a8(pph,qph)     = int2d(Thp)( ((s0 + (alphap^2)*trAI)/dt)*(pph*qph) - eps*(pph*qph) );
+  313 : 
+  314 : varf b1( [vphih1,vphih2] , [Rfh1,Rfh2,Rfh3,Rfh4] )    = int1d(Thf,gammafp)( -( [vphih1,vphih2] '*([[ [Rfh1,Rfh2,Rfh3,Rfh4] [0], [Rfh1,Rfh2,Rfh3,Rfh4] [1]],[ [Rfh1,Rfh2,Rfh3,Rfh4] [2], [Rfh1,Rfh2,Rfh3,Rfh4] [3]]]* [N.x,N.y] )) );
+  315 : varf b2( [thetah1,thetah2] , [tauph1,tauph2,tauph3,tauph4] ) = int1d(Thp,gammafp)( -( [thetah1,thetah2] '*([[ [tauph1,tauph2,tauph3,tauph4] [0], [tauph1,tauph2,tauph3,tauph4] [1]],[ [tauph1,tauph2,tauph3,tauph4] [2], [tauph1,tauph2,tauph3,tauph4] [3]]]* [N.x,N.y] )) );
+  316 : varf b3([lamh], [vph1,vph2] )   = int1d(Thp,gammafp)( lamh*( [vph1,vph2] '* [N.x,N.y] ) );
+  317 : 
+  318 : varf c1( [vphih1,vphih2] , [psih1,psih2] )  = int1d(Shf,gammafp)( -omi*( [vphih1,vphih2] '* [-N.y,N.x] )*( [psih1,psih2] '* [-N.y,N.x] ) - rhof*( [vphih1,vphih2] '* [N.x,N.y] )*( [wphih1,wphih2] '* [psih1,psih2] ) - rhof*( [wphih1,wphih2] '* [N.x,N.y] )*( [vphih1,vphih2] '* [psih1,psih2] ) ) + intalledges(Shf)( epsI*( [vphih1,vphih2] '* [psih1,psih2] ) );
+  319 : varf c2( [thetah1,thetah2] , [psih1,psih2] ) = int1d(Shf,gammafp)(  omi*( [thetah1,thetah2] '* [-N.y,N.x] )*( [psih1,psih2] '* [-N.y,N.x] ) );
+  320 : varf c3([lamh], [psih1,psih2] ) = int1d(Shf,gammafp)( -lamh*( [psih1,psih2] '* [N.x,N.y] ) );
+  321 : varf c4( [vphih1,vphih2] , [phih1,phih2] )  = int1d(Shp,gammafp)(  omi*( [vphih1,vphih2] '* [-N.y,N.x] )*( [phih1,phih2] '* [-N.y,N.x] ) );
+  322 : varf c5( [thetah1,thetah2] , [phih1,phih2] ) = int1d(Shp,gammafp)( -omi*( [thetah1,thetah2] '* [-N.y,N.x] )*( [phih1,phih2] '* [-N.y,N.x] ) ) + intalledges(Shp)( epsI*( [thetah1,thetah2] '* [phih1,phih2] ) );
+  323 : varf c6([lamh], [phih1,phih2] ) = int1d(Shp,gammafp)( -lamh*( [phih1,phih2] '* [N.x,N.y] ) );
+  324 : varf c7( [vphih1,vphih2] ,[xih]) = int1d(Shp,gammafp)( -xih*( [vphih1,vphih2] '* [N.x,N.y] ) );
+  325 : varf c8( [thetah1,thetah2] ,[xih])= int1d(Shp,gammafp)( xih*( [thetah1,thetah2] '* [N.x,N.y] ) );
+  326 : varf penI(lamh,xih)  = intalledges(Shp)( epsI*(lamh*xih) );
+  327 : 
+  328 : varf B1a( [ufh1,ufh2] , [Rfh1,Rfh2,Rfh3,Rfh4] )      = int2d(Thf)(  [ufh1,ufh2] '*       [dx( [Rfh1,Rfh2,Rfh3,Rfh4] [0]) + dy( [Rfh1,Rfh2,Rfh3,Rfh4] [1]),dx( [Rfh1,Rfh2,Rfh3,Rfh4] [2]) + dy( [Rfh1,Rfh2,Rfh3,Rfh4] [3])]  + (rhof/(2.*mu))*((   [0.5*( [ufh1,ufh2] [0]* [wfh1,wfh2] [0]- [ufh1,ufh2] [1]* [wfh1,wfh2] [1]), [ufh1,ufh2] [0]* [wfh1,wfh2] [1], [ufh1,ufh2] [1]* [wfh1,wfh2] [0],0.5*( [ufh1,ufh2] [1]* [wfh1,wfh2] [1]- [ufh1,ufh2] [0]* [wfh1,wfh2] [0])] +   [0.5*( [wfh1,wfh2] [0]* [ufh1,ufh2] [0]- [wfh1,wfh2] [1]* [ufh1,ufh2] [1]), [wfh1,wfh2] [0]* [ufh1,ufh2] [1], [wfh1,wfh2] [1]* [ufh1,ufh2] [0],0.5*( [wfh1,wfh2] [1]* [ufh1,ufh2] [1]- [wfh1,wfh2] [0]* [ufh1,ufh2] [0])] )'* [Rfh1,Rfh2,Rfh3,Rfh4] ) );
+  329 : varf B1b( [Tfh1,Tfh2,Tfh3,Tfh4] , [vfh1,vfh2] )      = int2d(Thf)(  [vfh1,vfh2] '*       [dx( [Tfh1,Tfh2,Tfh3,Tfh4] [0]) + dy( [Tfh1,Tfh2,Tfh3,Tfh4] [1]),dx( [Tfh1,Tfh2,Tfh3,Tfh4] [2]) + dy( [Tfh1,Tfh2,Tfh3,Tfh4] [3])]  );
+  330 : varf B2( [ush1,ush2] , [tauph1,tauph2,tauph3,tauph4] )     = int2d(Thp)(  [ush1,ush2] '*       [dx( [tauph1,tauph2,tauph3,tauph4] [0]) + dy( [tauph1,tauph2,tauph3,tauph4] [1]),dx( [tauph1,tauph2,tauph3,tauph4] [2]) + dy( [tauph1,tauph2,tauph3,tauph4] [3])]  );
+  331 : varf B3([gamfh], [Rfh1,Rfh2,Rfh3,Rfh4] )   = int2d(Thf)( gamfh*( [Rfh1,Rfh2,Rfh3,Rfh4] [1] -  [Rfh1,Rfh2,Rfh3,Rfh4] [2]) );
+  332 : varf B4([gamph], [tauph1,tauph2,tauph3,tauph4] ) = int2d(Thp)( gamph*( [tauph1,tauph2,tauph3,tauph4] [1] -  [tauph1,tauph2,tauph3,tauph4] [2]) );
+  333 : 
+  334 : varf B5( [auxfh1,auxfh2] , [Rfh1,Rfh2,Rfh3,Rfh4] )     = int1d(Thf,gammafN)( -( [auxfh1,auxfh2] '*([[ [Rfh1,Rfh2,Rfh3,Rfh4] [0], [Rfh1,Rfh2,Rfh3,Rfh4] [1]],[ [Rfh1,Rfh2,Rfh3,Rfh4] [2], [Rfh1,Rfh2,Rfh3,Rfh4] [3]]]* [N.x,N.y] )) );
+  335 : varf B6([auxph], [vph1,vph2] )   = int1d(Thp,gammapN)( auxph*( [vph1,vph2] '* [N.x,N.y] ) );
+  336 : varf faux( [auxfh1,auxfh2] , [xaufh1,xaufh2] ) = intalledges(Shf)( epsI*( [auxfh1,auxfh2] '* [xaufh1,xaufh2] ) );
+  337 : varf paux(auxph,xauph) = intalledges(Shp)( epsI*(auxph*xauph) );
+  338 : 
+  339 : //-----	RHS
+  340 : varf rhs1( [Tfh1,Tfh2,Tfh3,Tfh4] , [Rfh1,Rfh2,Rfh3,Rfh4] )     = int2d(Thf)( (rhof/(2.*mu))*(   [0.5*( [wfh1,wfh2] [0]* [wfh1,wfh2] [0]- [wfh1,wfh2] [1]* [wfh1,wfh2] [1]), [wfh1,wfh2] [0]* [wfh1,wfh2] [1], [wfh1,wfh2] [1]* [wfh1,wfh2] [0],0.5*( [wfh1,wfh2] [1]* [wfh1,wfh2] [1]- [wfh1,wfh2] [0]* [wfh1,wfh2] [0])] '* [Rfh1,Rfh2,Rfh3,Rfh4] ) ) + int1d(Thf,gammafD)(  [uf1,uf2] '*([[ [Rfh1,Rfh2,Rfh3,Rfh4] [0], [Rfh1,Rfh2,Rfh3,Rfh4] [1]],[ [Rfh1,Rfh2,Rfh3,Rfh4] [2], [Rfh1,Rfh2,Rfh3,Rfh4] [3]]]* [N.x,N.y] ) );
+  341 : varf rhs2( [uph1,uph2] , [vph1,vph2] )     = int1d(Thp,gammapD)( -(pp*( [vph1,vph2] '* [N.x,N.y] )) );
+  342 : varf rhs3( [sigph1,sigph2,sigph3,sigph4] , [tauph1,tauph2,tauph3,tauph4] ) = int2d(Thp)( (alphap/dt)*(pphold*   (     ( [tauph1,tauph2,tauph3,tauph4] [0] +  [tauph1,tauph2,tauph3,tauph4] [3]) /(2.*(mup+lamp))) ) + (   [( [sigphold1,sigphold2,sigphold3,sigphold4] [0]-lamup*     ( [sigphold1,sigphold2,sigphold3,sigphold4] [0] +  [sigphold1,sigphold2,sigphold3,sigphold4] [3]) )/(2.*mup), [sigphold1,sigphold2,sigphold3,sigphold4] [1]/(2.*mup), [sigphold1,sigphold2,sigphold3,sigphold4] [2]/(2.*mup),( [sigphold1,sigphold2,sigphold3,sigphold4] [3]-lamup*     ( [sigphold1,sigphold2,sigphold3,sigphold4] [0] +  [sigphold1,sigphold2,sigphold3,sigphold4] [3]) )/(2.*mup)] '* [tauph1,tauph2,tauph3,tauph4] )/dt ) + int1d(Thp,gammapD,gammapN)(  [us1,us2] '*([[ [tauph1,tauph2,tauph3,tauph4] [0], [tauph1,tauph2,tauph3,tauph4] [1]],[ [tauph1,tauph2,tauph3,tauph4] [2], [tauph1,tauph2,tauph3,tauph4] [3]]]* [N.x,N.y] ) );
+  343 : varf rhs4(pph,qph)     = int2d(Thp)( (gp + ((s0 + (alphap^2)*trAI)/dt)*pphold + (alphap/dt)*   (     ( [sigphold1,sigphold2,sigphold3,sigphold4] [0] +  [sigphold1,sigphold2,sigphold3,sigphold4] [3]) /(2.*(mup+lamp))) )*qph );
+  344 : varf rhs5( [ufh1,ufh2] , [vfh1,vfh2] )     = int2d(Thf)( -(( [ff1,ff2] )'* [vfh1,vfh2] ) );
+  345 : varf rhs6( [ush1,ush2] , [vsh1,vsh2] )     = int2d(Thp)( -( [fp1,fp2] '* [vsh1,vsh2] ) );
+  346 : varf bjs1( [vphih1,vphih2] , [psih1,psih2] )  = int1d(Shf,gammafp)( -rhof*( [wphih1,wphih2] '* [N.x,N.y] )*( [wphih1,wphih2] '* [psih1,psih2] ) ) + int1d(Thf,gammafp)( -( [psih1,psih2] '*([[ [Tf1,Tf2,Tf3,Tf4] [0], [Tf1,Tf2,Tf3,Tf4] [1]],[ [Tf1,Tf2,Tf3,Tf4] [2], [Tf1,Tf2,Tf3,Tf4] [3]]]* [N.x,N.y]  + rhof*([[uf1*uf1,uf1*uf2],[uf2*uf1,uf2*uf2]]* [N.x,N.y] ) + omi*(( [uf1,uf2] - [us1,us2] )'* [-N.y,N.x] )* [-N.y,N.x]  + pp* [N.x,N.y] )) ) + intalledges(Shf)( epsI*( [uf1,uf2] '* [psih1,psih2] ) );
+  347 : varf bjs2( [thetah1,thetah2] , [phih1,phih2] ) = int1d(Thp,gammafp)( -( [phih1,phih2] '*([[ [sigp1,sigp2,sigp3,sigp4] [0], [sigp1,sigp2,sigp3,sigp4] [1]],[ [sigp1,sigp2,sigp3,sigp4] [2], [sigp1,sigp2,sigp3,sigp4] [3]]]* [N.x,N.y]  - omi*(( [uf1,uf2] - [us1,us2] )'* [-N.y,N.x] )* [-N.y,N.x]  + pp* [N.x,N.y] )) ) + intalledges(Shp)( epsI*( [us1,us2] '* [phih1,phih2] ) );
+  348 : varf lpen(lamh,xih)    = int1d(Thp,gammafp)( xih*(( [us1,us2]  +  [up1,up2]  -  [uf1,uf2] )'* [N.x,N.y] ) ) + intalledges(Shp)( epsI*(pp*xih) );
+  349 : varf lauxf( [auxfh1,auxfh2] , [xaufh1,xaufh2] ) = int1d(Thf,gammafN)( -( [xaufh1,xaufh2] '*([[ [Tf1,Tf2,Tf3,Tf4] [0], [Tf1,Tf2,Tf3,Tf4] [1]],[ [Tf1,Tf2,Tf3,Tf4] [2], [Tf1,Tf2,Tf3,Tf4] [3]]]* [N.x,N.y] )) ) + intalledges(Shf)( epsI*( [uf1,uf2] '* [xaufh1,xaufh2] ) );
+  350 : varf lauxp(auxph,xauph) = int1d(Thp,gammapN)( xauph*( [up1,up2] '* [N.x,N.y] ) ) + intalledges(Shp)( epsI*(pp*xauph) );
+  351 : //---------------------------------------------------------------------------------
+  352 : // 			      					Stiff matrix
+  353 : //---------------------------------------------------------------------------------
+  354 : matrix aa1 = a1(QhTf,QhTf);
+  355 : matrix aa2 = a2(Qhup,Qhup);
+  356 : matrix aa3 = a3(Qhpp,Qhup);
+  357 : matrix aa4 = a4(Qhup,Qhpp);
+  358 : matrix aa5 = a5(Qhsigp,Qhsigp);
+  359 : matrix aa6 = a6(Qhpp,Qhsigp);
+  360 : matrix aa7 = a7(Qhsigp,Qhpp);
+  361 : matrix aa8 = a8(Qhpp,Qhpp);
+  362 : 
+  363 : matrix bb1 = b1(Lhf,QhTf);
+  364 : matrix bb2 = b2(Lhs,Qhsigp);
+  365 : matrix bb3 = b3(Lhp,Qhup);
+  366 : 
+  367 : matrix cc2 = c2(Lhs,Lhf);
+  368 : matrix cc3 = c3(Lhp,Lhf);
+  369 : matrix cc4 = c4(Lhf,Lhs);
+  370 : matrix cc5 = c5(Lhs,Lhs);
+  371 : matrix cc6 = c6(Lhp,Lhs);
+  372 : matrix cc7 = c7(Lhf,Lhp);
+  373 : matrix cc8 = c8(Lhs,Lhp);
+  374 : matrix PENI = penI(Lhp,Lhp);
+  375 : 
+  376 : matrix BB1b = B1b(QhTf,Shuf);
+  377 : matrix BB2 = B2(Shus,Qhsigp);
+  378 : matrix BB3 = B3(Shgamf,QhTf);
+  379 : matrix BB4 = B4(Shgamp,Qhsigp);
+  380 : matrix BB5 = B5(Auxf,QhTf);
+  381 : matrix PAF = faux(Auxf,Auxf);
+  382 : matrix BB6 = B6(Auxp,Qhup);
+  383 : matrix PAP = paux(Auxp,Auxp);
+  384 : 
+  385 : //----- Initial condition
+  386 : t = 0.;   
+  387 : pphold = pp;
+  388 :  [sigphold1,sigphold2,sigphold3,sigphold4]  = [sigp1,sigp2,sigp3,sigp4];
+  389 : 
+  390 : real[int] sol1(QhTf.ndof), sol2(Qhup.ndof), sol3(Qhsigp.ndof), sol4(Qhpp.ndof); 
+  391 : real[int] sol5(Lhf.ndof), sol6(Lhs.ndof), sol7(Lhp.ndof);
+  392 : real[int] sol8(Shuf.ndof), sol9(Shus.ndof), sol10(Shgamf.ndof), sol11(Shgamp.ndof);
+  393 : real[int] sol12(Auxf.ndof), sol13(Auxp.ndof);
+  394 : 
+  395 : Shus  [etaph1,etaph2] ;
+  396 :  [etaph1,etaph2]  = [0.,0.];
+  397 : 
+  398 :  [wfh1,wfh2]  = [0.,0.];
+  399 :  [wphih1,wphih2]  = [0.,0.];
+  400 : 
+  401 : for(int k = 0; k < NN; k++){  // loop in the number of time interval
+  402 :     t = t + dt;
+  403 : 
+  404 : //----- RHS data change in time
+  405 :     real[int] RHS2 = rhs2(0,Qhup);
+  406 :     real[int] RHS3 = rhs3(0,Qhsigp);
+  407 :     real[int] RHS4 = rhs4(0,Qhpp);
+  408 :     real[int] BJS2 = bjs2(0,Lhs);
+  409 :     real[int] LPEN = lpen(0,Lhp);
+  410 :     real[int] RHS5 = rhs5(0,Shuf);
+  411 :     real[int] RHS6 = rhs6(0,Shus);
+  412 :     real[int] ZZ1(Shgamf.ndof); ZZ1 = 0.;
+  413 :     real[int] ZZ2(Shgamp.ndof); ZZ2 = 0.;
+  414 :     real[int] LAUXF = lauxf(0,Auxf);
+  415 :     real[int] LAUXP = lauxp(0,Auxp);
+  416 : 
+  417 :     int itt = 0;
+  418 :     tol = 10.;
+  419 :     real[int] solt(QhTf.ndof+Qhup.ndof+Qhsigp.ndof+Qhpp.ndof+Lhf.ndof+Lhs.ndof+Lhp.ndof+Shuf.ndof+Shus.ndof+Shgamf.ndof+Shgamp.ndof+Auxf.ndof+Auxp.ndof); 
+  420 :     solt = 0.;
+  421 : 
+  422 : //----- solving the nonlinear problem in each step of time
+  423 :     while((tol > 1e-6) && (itt < 30)){
+  424 :         itt = itt + 1.;	
+  425 : 
+  426 :         real[int] RHS1 = rhs1(0,QhTf);   
+  427 :         real[int] BJS1 = bjs1(0,Lhf);     
+  428 :         real[int] L = [RHS1,RHS2,RHS3,RHS4,BJS1,BJS2,LPEN,RHS5,RHS6,ZZ1,ZZ2,LAUXF,LAUXP];
+  429 : 
+  430 :         matrix BB1a = B1a(Shuf,QhTf);    
+  431 :         matrix cc1  = c1(Lhf,Lhf);
+  432 :         matrix M;{
+  433 :         M = [[  aa1,    0,    0,   0,  bb1,   0,    0, BB1a,   0, BB3,   0, BB5,   0],
+  434 : 	         [    0,  aa2,    0, aa3,    0,   0,  bb3,    0,   0,   0,   0,   0, BB6],
+  435 : 	         [    0,    0,  aa5, aa6,    0, bb2,    0,    0, BB2,   0, BB4,   0,   0],
+  436 :              [    0,  aa4,  aa7, aa8,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+  437 :              [ bb1',    0,    0,   0,  cc1, cc2,  cc3,    0,   0,   0,   0,   0,   0],
+  438 :              [    0,    0, bb2',   0,  cc4, cc5,  cc6,    0,   0,   0,   0,   0,   0],
+  439 :              [    0, bb3',    0,   0,  cc7, cc8, PENI,    0,   0,   0,   0,   0,   0],
+  440 :              [ BB1b,    0,    0,   0,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+  441 :              [    0,    0, BB2',   0,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+  442 :              [ BB3',    0,    0,   0,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+  443 :              [    0,    0, BB4',   0,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+  444 :              [ BB5',    0,    0,   0,    0,   0,    0,    0,   0,   0,   0, PAF,   0],
+  445 :              [    0, BB6',    0,   0,    0,   0,    0,    0,   0,   0,   0,   0, PAP]];}
+  446 : 
+  447 :         set(M,solver = sparsesolver);
+  448 :         real[int] sol = M^-1*L;
+  449 : 
+  450 :         real adof = QhTf.ndof+Qhup.ndof+Qhsigp.ndof+Qhpp.ndof+Lhf.ndof+Lhs.ndof+Lhp.ndof;
+  451 :         real bdof = QhTf.ndof+Qhup.ndof+Qhsigp.ndof+Qhpp.ndof;
+  452 :         wfh1[]   = sol(adof:adof + Shuf.ndof-1);
+  453 :         wphih1[] = sol(bdof:bdof + Lhf.ndof-1);
+  454 : 
+  455 : //----- computing tol
+  456 :         real[int] diff = sol - solt;   
+  457 :         tol = sqrt(diff'*diff)/sqrt(sol'*sol);
+  458 : 	    cout << " tolerance = " << tol << endl;
+  459 : 
+  460 : //----- updating data for the next step 
+  461 : 	    solt  = sol;
+  462 :     }
+  463 :     auxitt[k] = itt;
+  464 : 
+  465 : //----- Approximation of the solution
+  466 :     [sol1,sol2,sol3,sol4,sol5,sol6,sol7,sol8,sol9,sol10,sol11,sol12,sol13] = solt;
+  467 : 
+  468 :     Tfh1[]   = sol1;
+  469 :     uph1[]   = sol2;
+  470 :     sigph1[] = sol3;
+  471 :     pph[]    = sol4;
+  472 :     vphih1[] = sol5;
+  473 :     thetah1[]= sol6;
+  474 :     lamh[]   = sol7;
+  475 :     ufh1[]   = sol8;
+  476 :     ush1[]   = sol9;
+  477 :     gamfh[]  = sol10;
+  478 :     gamph[]  = sol11;
+  479 : 
+  480 :     etaph1[] = dt*ush1[] + etaph1[];
+  481 : 
+  482 : //----- calculating the errors
+  483 :     Tferror[n]   += int2d(Thf)( ( [Tf1,Tf2,Tf3,Tf4]  -  [Tfh1,Tfh2,Tfh3,Tfh4] )'*( [Tf1,Tf2,Tf3,Tf4]  -  [Tfh1,Tfh2,Tfh3,Tfh4] ) ) + pow(int2d(Thf)( pow(( [DivTf1,DivTf2]  -        [dx( [Tfh1,Tfh2,Tfh3,Tfh4] [0]) + dy( [Tfh1,Tfh2,Tfh3,Tfh4] [1]),dx( [Tfh1,Tfh2,Tfh3,Tfh4] [2]) + dy( [Tfh1,Tfh2,Tfh3,Tfh4] [3])] )'*( [DivTf1,DivTf2]  -        [dx( [Tfh1,Tfh2,Tfh3,Tfh4] [0]) + dy( [Tfh1,Tfh2,Tfh3,Tfh4] [1]),dx( [Tfh1,Tfh2,Tfh3,Tfh4] [2]) + dy( [Tfh1,Tfh2,Tfh3,Tfh4] [3])] ),2./3.) ),3./2.);
+  484 :     uferror[n]   += pow(int2d(Thf)( pow(( [uf1,uf2]  -  [ufh1,ufh2] )'*( [uf1,uf2]  -  [ufh1,ufh2] ),2.) ),1./2.);
+  485 :     eauxuf[k]     = sqrt(int2d(Thf)( ( [uf1,uf2]  -  [ufh1,ufh2] )'*( [uf1,uf2]  -  [ufh1,ufh2] ) ));
+  486 :     gamferror[n] += int2d(Thf)( 2.*square(gamf - gamfh) );
+  487 :     pferror[n]   += int2d(Thf)( square(pf -       (-0.5*(     ( [Tfh1,Tfh2,Tfh3,Tfh4] [0] +  [Tfh1,Tfh2,Tfh3,Tfh4] [3])  + rhof*( [ufh1,ufh2] [0]^2+ [ufh1,ufh2] [1]^2)) ) ) );
+  488 : 
+  489 :     eauxsigp[k]   = sqrt(int2d(Thp)( ( [sigp1,sigp2,sigp3,sigp4]  -  [sigph1,sigph2,sigph3,sigph4] )'*( [sigp1,sigp2,sigp3,sigp4]  -  [sigph1,sigph2,sigph3,sigph4] ) + ( [fp1,fp2]  +        [dx( [sigph1,sigph2,sigph3,sigph4] [0]) + dy( [sigph1,sigph2,sigph3,sigph4] [1]),dx( [sigph1,sigph2,sigph3,sigph4] [2]) + dy( [sigph1,sigph2,sigph3,sigph4] [3])] )'*( [fp1,fp2]  +        [dx( [sigph1,sigph2,sigph3,sigph4] [0]) + dy( [sigph1,sigph2,sigph3,sigph4] [1]),dx( [sigph1,sigph2,sigph3,sigph4] [2]) + dy( [sigph1,sigph2,sigph3,sigph4] [3])] ) ));
+  490 :     uperror[n]   += int2d(Thp)( ( [up1,up2]  -  [uph1,uph2] )'*( [up1,up2]  -  [uph1,uph2] ) + square(divup -      (dx( [uph1,uph2] [0]) + dy( [uph1,uph2] [1])) ) );
+  491 :     eauxpp[k]     = sqrt(int2d(Thp)( square(pp - pph) ));
+  492 :     userror[n]   += int2d(Thp)( ( [us1,us2]  -  [ush1,ush2] )'*( [us1,us2]  -  [ush1,ush2] ) );
+  493 :     gamperror[n] += int2d(Thp)( 2.*square(gamp - gamph) );
+  494 :     etaperror[n] += int2d(Thp)( ( [etap1,etap2]  -  [etaph1,etaph2] )'*( [etap1,etap2]  -  [etaph1,etaph2] ) );
+  495 : 
+  496 :     vphierror[n]  += int1d(Shf,gammafp)( ( [uf1,uf2]  -  [vphih1,vphih2] )'*( [uf1,uf2]  -  [vphih1,vphih2] ) );
+  497 :     thetaerror[n] += int1d(Shp,gammafp)( ( [us1,us2]  -  [thetah1,thetah2] )'*( [us1,us2]  -  [thetah1,thetah2] ) );
+  498 :     lamerror[n]   += int1d(Shp,gammafp)( square(pp - lamh) );
+  499 : 
+  500 : //----- updating RHS
+  501 :     pphold = pph;
+  502 :      [sigphold1,sigphold2,sigphold3,sigphold4]  = [sigph1,sigph2,sigph3,sigph4];
+  503 : }
+  504 : iterations[n] = (auxitt.sum)/NN;
+  505 : 
+  506 : Tferror[n]   = sqrt(dt*Tferror[n]);
+  507 : uferror[n]   = sqrt(dt*uferror[n]);
+  508 : ufinferror[n]= eauxuf.max;
+  509 : gamferror[n] = sqrt(dt*gamferror[n]);
+  510 : pferror[n]   = sqrt(dt*pferror[n]);
+  511 : 
+  512 : sigperror[n] = eauxsigp.max;
+  513 : uperror[n]   = sqrt(dt*uperror[n]);
+  514 : pperror[n]   = eauxpp.max;   
+  515 : userror[n]   = sqrt(dt*userror[n]);  
+  516 : etaperror[n] = sqrt(dt*etaperror[n]);  
+  517 : gamperror[n] = sqrt(dt*gamperror[n]);
+  518 : 
+  519 : vphierror[n] = sqrt(dt*vphierror[n]);
+  520 : thetaerror[n] = sqrt(dt*thetaerror[n]);
+  521 : lamerror[n] = sqrt(dt*lamerror[n]);    
+  522 : 
+  523 : //----- for the meshsize in Omega
+  524 : Phf hf = hTriangle;
+  525 : hF[n]  = hf[].max;
+  526 : 
+  527 : Php hp = hTriangle;
+  528 : hP[n]  = hp[].max;
+  529 : 
+  530 : htf[n] = 1.0 / sizef;
+  531 : htp[n] = 1.0 / sizep;
+  532 : 
+  533 : DOFf[n] = QhTf.ndof + Shuf.ndof + Shgamf.ndof + Lhf.ndof;
+  534 : DOFp[n] = Qhsigp.ndof + Qhup.ndof + Qhpp.ndof + Shus.ndof + Shgamp.ndof + Lhs.ndof + Lhp.ndof;
+  535 : 
+  536 : //----- exporting to Praraview
+  537 : /*savevtk("Data_Paraview_2D/NavierStokes_aprox"+n+".vtk",Thf,[Tfh1,Tfh2,0],[Tfh3,Tfh4,0],[ufh1,ufh2,0],gamfh,pfh(Tfh,ufh),dataname="Tfh1 Tfh2 ufh gamfh pfh");
+  538 : savevtk("Data_Paraview_2D/Biot_approx"+n+".vtk",Thp,[sigph1,sigph2,0],[sigph3,sigph4,0],[uph1,uph2,0],[ush1,ush2,0],gamph,pph,dataname="sigph1 sigph2 uph ush gamph pph");
+  539 : savevtk("Data_Paraview_2D/NavierStokes_exact"+n+".vtk",Thf,[Tf1,Tf2,0],[Tf3,Tf4,0],[uf1,uf2,0],gamf,pf,dataname="Tf1 Tf2 uf gamf pf");
+  540 : savevtk("Data_Paraview_2D/Biot_exact"+n+".vtk",Thp,[sigp1,sigp2,0],[sigp3,sigp4,0],[up1,up2,0],[us1,us2,0],gamp,pp,dataname="sigp1 sigp2 up us gamp pp");
+  541 : */
+  542 : }
+  543 : //---------------------------------------------------------------------------------
+  544 : // 			      				showing the tables
+  545 : //---------------------------------------------------------------------------------
+  546 : cout << " Tferror = " << Tferror <<endl;
+  547 : for(int n = 1; n < nref; n++)
+  548 : Tfrate[n-1] = log(Tferror[n-1]/Tferror[n]) / log(hF[n-1]/hF[n]);
+  549 : cout <<" convergence rate Tf = "<< Tfrate <<endl;
+  550 : 
+  551 : cout << " uferror = " << uferror <<endl;
+  552 : for(int n = 1; n < nref; n++)
+  553 : ufrate[n-1] = log(uferror[n-1]/uferror[n]) / log(hF[n-1]/hF[n]);
+  554 : cout << " convergence rate uf = " << ufrate <<endl;
+  555 : 
+  556 : cout << " uf Linf-error = " << ufinferror <<endl;
+  557 : for(int n = 1; n < nref; n++)
+  558 : ufinfrate[n-1] = log(ufinferror[n-1]/ufinferror[n]) / log(hF[n-1]/hF[n]);
+  559 : cout << " convergence rate uf in Linf = " << ufinfrate <<endl;
+  560 : 
+  561 : cout << " gamferror = " << gamferror <<endl;
+  562 : for(int n = 1; n < nref; n++)
+  563 : gamfrate[n-1] = log(gamferror[n-1]/gamferror[n]) / log(hF[n-1]/hF[n]);
+  564 : cout << " convergence rate gamf = " << gamfrate <<endl;
+  565 : 
+  566 : cout << " pferror = " << pferror <<endl;
+  567 : for(int n = 1; n < nref; n++)
+  568 : pfrate[n-1] = log(pferror[n-1]/pferror[n]) / log(hF[n-1]/hF[n]);
+  569 : cout << " convergence rate pf = " << pfrate <<endl;
+  570 : //
+  571 : cout << " sigperror = " << sigperror <<endl;
+  572 : for(int n = 1; n < nref; n++)
+  573 : sigprate[n-1] = log(sigperror[n-1]/sigperror[n]) / log(hP[n-1]/hP[n]);
+  574 : cout << " convergence rate sigp = " << sigprate <<endl;
+  575 : 
+  576 : cout << " userror = " << userror <<endl;
+  577 : for(int n = 1; n < nref; n++)
+  578 : usrate[n-1] = log(userror[n-1]/userror[n]) / log(hP[n-1]/hP[n]);
+  579 : cout << " convergence rate us = " << usrate <<endl;
+  580 : 
+  581 : cout << " etap error = " << etaperror <<endl;
+  582 : for(int n = 1; n < nref; n++)
+  583 : etaprate[n-1] = log(etaperror[n-1]/etaperror[n]) / log(hP[n-1]/hP[n]);
+  584 : cout << " convergence rate etap = " << etaprate <<endl;
+  585 : 
+  586 : cout << " gamperror = " << gamperror <<endl;
+  587 : for(int n = 1; n < nref; n++)
+  588 : gamprate[n-1] = log(gamperror[n-1]/gamperror[n]) / log(hP[n-1]/hP[n]);
+  589 : cout << " convergence rate gamp = " << gamprate <<endl;
+  590 : 
+  591 : cout << " uperror = " << uperror <<endl;
+  592 : for(int n = 1; n < nref; n++)
+  593 : uprate[n-1] = log(uperror[n-1]/uperror[n]) / log(hP[n-1]/hP[n]);
+  594 : cout << " convergence rate up = " << uprate <<endl;
+  595 : 
+  596 : cout << " pperror = " << pperror <<endl;
+  597 : for(int n = 1; n < nref; n++)
+  598 : pprate[n-1] = log(pperror[n-1]/pperror[n]) / log(hP[n-1]/hP[n]);
+  599 : cout << " convergence rate pp = " << pprate <<endl;
+  600 : 
+  601 : cout << " vphierror in L2 = " << vphierror <<endl;
+  602 : for(int n = 1; n < nref; n++)
+  603 : vphirate[n-1] = log(vphierror[n-1]/vphierror[n]) / log(htf[n-1]/htf[n]);
+  604 : cout << " convergence rate vphi in L2 = " << vphirate <<endl;
+  605 : 
+  606 : cout << " thetaerror in L2 = " << thetaerror <<endl;
+  607 : for(int n = 1; n < nref; n++)
+  608 : thetarate[n-1] = log(thetaerror[n-1]/thetaerror[n]) / log(htp[n-1]/htp[n]);
+  609 : cout << " convergence rate theta in L2 = " << thetarate <<endl;
+  610 : 
+  611 : cout << " lamerror in L2 = " << lamerror <<endl;
+  612 : for(int n = 1; n < nref; n++)
+  613 : lamrate[n-1] = log(lamerror[n-1]/lamerror[n]) / log(htp[n-1]/htp[n]);
+  614 : cout << " convergence rate lam in L2 = " << lamrate <<endl;
+  615 : 
+  616 : cout << " mesh size Of = " << hF <<endl;
+  617 : cout << " mesh size Op = " << hP <<endl;
+  618 : cout << " mesh size Gammafp in Of = " << htf <<endl;
+  619 : cout << " mesh size Gammafp in Op = " << htp <<endl;
+  620 : cout << " degrees of freedom Of = " << DOFf <<endl;
+  621 : cout << " degrees of freedom Op = " << DOFp <<endl;
+  622 : cout << " Newton iterations = " << iterations <<endl;
+  623 :  sizestack + 1024 =76728  ( 75704 )
+
+  --  mesh:  Nb of Triangles =    152, Nb of Vertices 93
+  --  mesh:  Nb of Triangles =     60, Nb of Vertices 41
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 40107
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 0.0145017
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1.50834e-05
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 2.62387e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 3.23448e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 3.47041e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 3.16948e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 2.82332e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 2.87833e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 3.28011e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 2.6811e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 2.65414e-07
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2848x2848 nb  none zero coef. 42915
+ tolerance = 3.18468e-07
+  --  mesh:  Nb of Triangles =    598, Nb of Vertices 332
+  --  mesh:  Nb of Triangles =    232, Nb of Vertices 137
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 150437
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 0.0117575
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1.02527e-05
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 2.00748e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1.62379e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1.22895e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1.78308e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1.42226e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 2.23739e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1.15791e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 2.00843e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1.26854e-07
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =9846x9846 nb  none zero coef. 161345
+ tolerance = 1.75254e-07
+  --  mesh:  Nb of Triangles =   2408, Nb of Vertices 1269
+  --  mesh:  Nb of Triangles =    960, Nb of Vertices 521
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 597557
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 0.0107154
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1.15421e-05
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 9.78096e-08
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1.3571e-07
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1.41064e-07
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 9.51105e-08
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 8.69667e-08
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 8.34173e-08
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1.07092e-07
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1.08665e-07
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1.1937e-07
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =37096x37096 nb  none zero coef. 641189
+ tolerance = 9.30921e-08
+  --  mesh:  Nb of Triangles =   9698, Nb of Vertices 4978
+  --  mesh:  Nb of Triangles =   3774, Nb of Vertices 1968
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2358819
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 0.0107395
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1.21984e-05
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 3.74755e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 4.19304e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 6.92582e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 6.20985e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 4.09695e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 5.04494e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 7.04969e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 5.73681e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 3.22652e-08
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =142280x142280 nb  none zero coef. 2533959
+ tolerance = 5.22034e-08
+  --  mesh:  Nb of Triangles =  38976, Nb of Vertices 19745
+  --  mesh:  Nb of Triangles =  14998, Nb of Vertices 7660
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 9387611
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 0.011101
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1.26073e-05
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 3.07969e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 3.73281e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 3.12663e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 3.00948e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 3.5781e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 2.95674e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 3.64564e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 3.23291e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 2.74925e-08
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =557678x557678 nb  none zero coef. 10090331
+ tolerance = 2.88805e-08
+  --  mesh:  Nb of Triangles = 154234, Nb of Vertices 77630
+  --  mesh:  Nb of Triangles =  60574, Nb of Vertices 30608
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 37304166
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 0.0110983
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.26945e-05
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.56237e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.83267e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.86323e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.81117e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.83061e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.94439e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 2.05969e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.5955e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1.91414e-08
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 1
+  -- Block Matrix NxM = 13x13    nxm  =2199456x2199456 nb  none zero coef. 40082682
+ tolerance = 2.42686e-08
+ Tferror = 6	
+	0.1569073147	0.07932066467	0.03866711489	0.01940119212	0.009674783006
+	0.004795400221	
+ convergence rate Tf = 5	
+	1.005854009	1.002843914	1.032308681	1.142475006	1.10396585
+	
+ uferror = 6	
+	0.01157191228	0.005606376421	0.002669202031	0.001345950459	0.0006705683382
+	0.0003300156032	
+ convergence rate uf = 5	
+	1.06855006	1.035805227	1.024860601	1.143982925	1.115164981
+	
+ uf Linf-error = 6	
+	0.0956802015	0.04507808154	0.02153241106	0.01078422658	0.005375561554
+	0.002660174922	
+ convergence rate uf in Linf = 5	
+	1.109746773	1.031215801	1.035032563	1.143147898	1.106491182
+	
+ gamferror = 6	
+	0.02727764277	0.01297188256	0.006518179857	0.003271312245	0.001616447675
+	0.0008063665974	
+ convergence rate gamf = 5	
+	1.095986576	0.9605251014	1.031932958	1.157496298	1.093871144
+	
+ pferror = 6	
+	0.007192160866	0.002540776852	0.001068753452	0.0005111014892	0.0002447959073
+	0.0001208795786	
+ convergence rate pf = 5	
+	1.534270888	1.208668848	1.104194941	1.208696794	1.109886822
+	
+ sigperror = 6	
+	0.2732690129	0.1372037603	0.06665094316	0.03365602816	0.01688636548
+	0.008431364497	
+ convergence rate sigp = 5	
+	1.273167576	0.9649980339	1.16901197	1.063447034	1.146193795
+	
+ userror = 6	
+	0.04320537526	0.0222358191	0.01082763395	0.005411611347	0.00270935002
+	0.001353262791	
+ convergence rate us = 5	
+	1.2274712	0.9617969201	1.186595911	1.066765993	1.145603498
+	
+ etap error = 6	
+	0.0002677202219	0.0001379442936	6.718576837e-05	3.358073766e-05	1.681253666e-05
+	8.397640141e-06	
+ convergence rate etap = 5	
+	1.225313065	0.9615103506	1.186517476	1.06675003	1.145576937
+	
+ gamperror = 6	
+	0.08640098524	0.02155198984	0.004941819257	0.001523553916	0.0005805540548
+	0.0002654121975	
+ convergence rate gamp = 5	
+	2.565833507	1.96840733	2.013183707	1.487681959	1.291666923
+	
+ uperror = 6	
+	0.1042960668	0.05015407757	0.0239189281	0.0116136762	0.005787788526
+	0.002891617357	
+ convergence rate up = 5	
+	1.352892815	0.9896333255	1.236095488	1.073851134	1.145181167
+	
+ pperror = 6	
+	0.07541535158	0.03838301732	0.01910031105	0.009388878938	0.004703416866
+	0.002353178695	
+ convergence rate pp = 5	
+	1.248047855	0.9328035749	1.21503784	1.065838563	1.142850816
+	
+ vphierror in L2 = 6	
+	0.006495993808	0.001521962298	0.0003740759066	9.421483636e-05	2.419413122e-05
+	5.64949559e-06	
+ convergence rate vphi in L2 = 5	
+	2.093617636	2.024529668	1.989304879	1.961297129	2.098463166
+	
+ thetaerror in L2 = 6	
+	0.009251361929	0.002784363185	0.0006777335052	0.000170741982	4.290770605e-05
+	1.065748175e-05	
+ convergence rate theta in L2 = 5	
+	1.732318361	2.038557404	1.988900264	1.992509153	2.009370188
+	
+ lamerror in L2 = 6	
+	0.001074418004	0.0002682505977	6.717174732e-05	1.686138262e-05	4.266398185e-06
+	1.094155931e-06	
+ convergence rate lam in L2 = 5	
+	2.001902095	1.997654923	1.994131716	1.982632317	1.963200264
+	
+ mesh size Of = 6	
+	0.1964185503	0.09968959983	0.04869565233	0.02496610856	0.01357840092
+	0.00719015576	
+ mesh size Op = 6	
+	0.2828427132	0.1646347226	0.07790914306	0.0434257369	0.02270339386
+	0.01238584334	
+ mesh size Gammafp in Of = 6	
+	0.125	0.0625	0.03125	0.015625	0.0078125
+	0.00390625	
+ mesh size Gammafp in Op = 6	
+	0.2	0.1	0.05	0.025	0.0125
+	0.00625	
+ degrees of freedom Of = 6	
+	1612	5882	22684	89318	354868
+	1396286	
+ degrees of freedom Op = 6	
+	1002	3478	13422	50964	198796
+	795124	
+ Newton iterations = 6	
+	2.2	2.2	2.2	2.2	2.2
+	2.2	
+times: compile 0.02791s, execution 192809s,  mpirank:0
+XIO:  fatal IO error 11 (Resource temporarily unavailable) on X server "localhost:10.0"
+      after 19 requests (19 known processed) with 0 events remaining.
+ CodeAlloc : nb ptr  8806,  size :624640 mpirank: 0
+Ok: Normal End
