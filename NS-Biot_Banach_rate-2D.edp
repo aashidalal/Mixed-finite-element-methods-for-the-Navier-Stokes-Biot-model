@@ -1,0 +1,622 @@
+//
+// This code solves a Banach spaces-based fully-mixed finite element method
+// for the Navier-Stokes-Biot model 
+//
+// authors: Sergio Caucao, Aashi Dalal, Tongtong Li, Ivan Yotov
+//
+// Global information
+load "iovtk";         // for saving data in paraview format
+load "UMFPACK64";     // UMFPACK solver
+load "Element_Mixte"; // for using BDM1
+//---------------------------------------------------------------------------------
+// 								Initial parameters
+//---------------------------------------------------------------------------------
+
+//----- Global parameters
+int nref = 6;
+real tol, t;
+real T = 0.01;   //total time T=0.01; 
+real dt = 0.001;  //delta t=0.001;
+real NN = T/dt;  //number of time interval
+real[int] iterations(nref);
+real[int] auxitt(NN);   
+
+//----- Navier-Stokes
+real[int] Tferror(nref);
+real[int] uferror(nref);
+real[int] ufinferror(nref);
+real[int] eauxuf(NN);   
+real[int] gamferror(nref);          
+real[int] pferror(nref);   
+real[int] hF(nref);   
+real[int] DOFf(nref);
+
+//----- Biot
+real[int] sigperror(nref);
+real[int] eauxsigp(NN);
+real[int] uperror(nref);
+real[int] pperror(nref);
+real[int] eauxpp(NN);
+real[int] userror(nref);  
+real[int] etaperror(nref);  
+real[int] gamperror(nref);         
+real[int] hP(nref);  
+real[int] DOFp(nref);
+
+//----- Interface
+real[int] vphierror(nref);
+real[int] thetaerror(nref);
+real[int] lamerror(nref);  
+real[int] htf(nref); 
+real[int] htp(nref); 
+
+//----- rate of convergence
+real[int] Tfrate(nref-1);
+real[int] ufrate(nref-1);
+real[int] ufinfrate(nref-1);
+real[int] gamfrate(nref-1);
+real[int] pfrate(nref-1);
+
+real[int] sigprate(nref-1);
+real[int] uprate(nref-1);
+real[int] pprate(nref-1);
+real[int] usrate(nref-1);
+real[int] etaprate(nref-1);
+real[int] gamprate(nref-1);
+
+real[int] vphirate(nref-1);
+real[int] thetarate(nref-1);
+real[int] lamrate(nref-1);
+//---------------------------------------------------------------------------------
+//									 Global data
+//---------------------------------------------------------------------------------
+
+//----- Navier-Stokes
+real mu = 1.;
+real rhof = 1.;
+
+func pf  =  (2.*pi)*cos(pi*t) + exp(t)*sin(pi*x)*cos((pi/2.)*y);
+func pfx =  pi*exp(t)*cos(pi*x)*cos((pi/2.)*y);
+func pfy = -(pi/2.)*exp(t)*sin(pi*x)*sin((pi/2.)*y);
+
+func uf1   =  exp(t)*sin(pi*x)*cos(pi*y);
+func uf2   = -exp(t)*cos(pi*x)*sin(pi*y); 
+func uf1x  =  pi*exp(t)*cos(pi*x)*cos(pi*y);
+func uf1y  = -pi*exp(t)*sin(pi*x)*sin(pi*y);
+func uf2x  =  pi*exp(t)*sin(pi*x)*sin(pi*y);
+func uf2y  = -uf1x;
+func uf1xx = -(pi^2)*exp(t)*sin(pi*x)*cos(pi*y);
+func uf1xy = -(pi^2)*exp(t)*cos(pi*x)*sin(pi*y);
+func uf1yy = -(pi^2)*exp(t)*sin(pi*x)*cos(pi*y);
+func uf2xx =  (pi^2)*exp(t)*cos(pi*x)*sin(pi*y);
+func uf2xy = -uf1xx;
+func uf2yy = -uf1xy;
+
+func gamf  = (uf1y - uf2x)/2.;
+
+func Tf1 = 2.*mu*uf1x - rhof*(uf1^2) - pf;
+func Tf2 = mu*(uf1y + uf2x) - rhof*(uf1*uf2);
+func Tf3 = Tf2;
+func Tf4 = 2.*mu*uf2y - rhof*(uf2^2) - pf;
+
+func DivTf1 = mu*(2.*uf1xx + uf1yy + uf2xy) - rhof*(uf1x*uf1 + uf1y*uf2) - pfx;
+func DivTf2 = mu*(uf1xy + uf2xx + 2.*uf2yy) - rhof*(uf2x*uf1 + uf2y*uf2) - pfy;
+func ff1 = -DivTf1;
+func ff2 = -DivTf2;
+
+//----- Biot
+real k1 = 1.; // matrix K=[[k1,k2],[k2,k3]]
+real k2 = 0.;
+real k3 = 1.;
+real s0 = 1.;
+real omi = 1.;
+real mup = 1.;
+real lamp = 1.;
+real trAI = (1./(mup+lamp));
+real lamup = lamp/(2.*(mup+lamp));
+real alphap = 1.;
+
+func pp  =  exp(t)*sin(pi*x)*cos((pi/2.)*y);
+func ppx =  pi*exp(t)*cos(pi*x)*cos((pi/2.)*y);
+func ppy = -(pi/2.)*exp(t)*sin(pi*x)*sin((pi/2.)*y);
+func ppt =  exp(t)*sin(pi*x)*cos((pi/2.)*y);
+
+func up1  = -(k1*ppx)/mu;
+func up2  = -(k3*ppy)/mu;
+func up1x =  ((k1*pi^2)/mu)*exp(t)*sin(pi*x)*cos((pi/2.)*y);
+func up2y =  ((k3*pi^2)/(4.*mu))*exp(t)*sin(pi*x)*cos((pi/2.)*y);
+
+func etap1   =  sin(pi*t)*(-3.*x + cos(y));
+func etap2   =  sin(pi*t)*(y + 1.);
+func etap1x  = -3.*sin(pi*t);
+func etap1y  = -sin(pi*t)*sin(y);
+func etap2x  =  0.;
+func etap2y  =  sin(pi*t);
+func etap1xx =  0.;
+func etap1xy =  0.;
+func etap1yy = -sin(pi*t)*cos(y);
+func etap2xx =  0.;
+func etap2xy =  0.;
+func etap2yy =  0.;
+
+func us1  = pi*cos(pi*t)*(-3.*x + cos(y));
+func us2  = pi*cos(pi*t)*(y + 1.);
+func us1x = -(3.*pi)*cos(pi*t);
+func us1y = -pi*cos(pi*t)*sin(y);
+func us2x = 0.;
+func us2y = pi*cos(pi*t);
+
+func gamp  = (us1y - us2x)/2.;
+
+func sigp1 = (lamp+2.*mup)*etap1x + lamp*etap2y - alphap*pp;
+func sigp2 = mup*(etap1y + etap2x);
+func sigp3 = sigp2;
+func sigp4 = lamp*etap1x + (lamp+2.*mup)*etap2y - alphap*pp;
+
+func divetapt = -(2.*pi)*cos(pi*t);
+func divup = up1x + up2y;
+func gp  = s0*ppt + alphap*divetapt + divup;
+func fp1 = -((lamp+2.*mup)*etap1xx + (lamp+mup)*etap2xy + mup*etap1yy) + alphap*ppx;
+func fp2 = -((lamp+2.*mup)*etap2yy + (lamp+mup)*etap1xy + mup*etap2xx) + alphap*ppy;
+
+//----- Global macros
+macro uf [uf1,uf2] //
+macro up [up1,up2] //
+macro us [us1,us2] //
+macro etap [etap1,etap2] //
+macro Tf [Tf1,Tf2,Tf3,Tf4] //
+macro DivTf [DivTf1,DivTf2] //
+macro sigp [sigp1,sigp2,sigp3,sigp4] //
+macro Ff [ff1,ff2] //
+macro Fp [fp1,fp2] //
+macro Ki [[k3/(k1*k3-k2^2),-k2/(k1*k3-k2^2)],[-k2/(k1*k3-k2^2),k1/(k1*k3-k2^2)]] //
+
+macro Tfh [Tfh1,Tfh2,Tfh3,Tfh4] //
+macro Rfh [Rfh1,Rfh2,Rfh3,Rfh4] //
+
+macro ufh [ufh1,ufh2] //
+macro vfh [vfh1,vfh2] //
+macro wfh [wfh1,wfh2] //
+
+macro sigph [sigph1,sigph2,sigph3,sigph4] //
+macro tauph [tauph1,tauph2,tauph3,tauph4] //
+macro sigphold [sigphold1,sigphold2,sigphold3,sigphold4] //
+
+macro uph [uph1,uph2] //
+macro vph [vph1,vph2] //
+
+macro ush [ush1,ush2] //
+macro vsh [vsh1,vsh2] //
+
+macro etaph [etaph1,etaph2] //
+
+macro vphih [vphih1,vphih2] //
+macro psih [psih1,psih2] //
+macro wphih [wphih1,wphih2] //
+
+macro auxfh [auxfh1,auxfh2] //
+macro xaufh [xaufh1,xaufh2] //
+
+macro thetah [thetah1,thetah2] //
+macro phih [phih1,phih2] //
+
+macro norm [N.x,N.y] //
+macro tgt  [-N.y,N.x] //
+
+macro div(vph) (dx(vph[0]) + dy(vph[1])) //
+macro conv(ufh,wfh) [0.5*(ufh[0]*wfh[0]-ufh[1]*wfh[1]),ufh[0]*wfh[1],ufh[1]*wfh[0],0.5*(ufh[1]*wfh[1]-ufh[0]*wfh[0])] //
+macro tr(Rfh) (Rfh[0] + Rfh[3]) // 
+macro trA(tauph) (tr(tauph)/(2.*(mup+lamp))) // 
+macro dev(Rfh) [0.5*(Rfh[0]-Rfh[3]),Rfh[1],Rfh[2],0.5*(Rfh[3]-Rfh[0])] //
+macro Div(Rfh) [dx(Rfh[0]) + dy(Rfh[1]),dx(Rfh[2]) + dy(Rfh[3])] //
+macro A(tauph) [(tauph[0]-lamup*tr(tauph))/(2.*mup),tauph[1]/(2.*mup),tauph[2]/(2.*mup),(tauph[3]-lamup*tr(tauph))/(2.*mup)] //
+macro pfh(Rfh,vfh) (-0.5*(tr(Rfh) + rhof*(vfh[0]^2+vfh[1]^2)) ) //
+//---------------------------------------------------------------------------------
+//	 							   Defining the domain
+//---------------------------------------------------------------------------------
+for(int n = 0; n < nref; n++){
+
+int sizef = 2^(n + 3); 
+int sizep = (5./8.)*sizef;
+
+int gammafp = 1;
+int gammafD = 21;
+int gammafN = 22;
+int gammapD = 31;
+int gammapN = 32;
+
+//----- Omegaf
+border Gammaf1(t=0,1){x=1; y=t; label = gammafN;};
+border Gammaf2(t=1,0){x=t; y=1; label = gammafD;};
+border Gammaf3(t=1,0){x=0; y=t; label = gammafN;};
+
+//----- Interface
+border Gammafp(t=0,1){x=t; y=0; label = gammafp;};
+
+//----- Omegap
+border Gammap1(t=0,-1){x=0; y=t; label = gammapN;};
+border Gammap2(t=0,1){x=t; y=-1; label = gammapD;};
+border Gammap3(t=-1,0){x=1; y=t; label = gammapN;};
+
+//----- Meshes
+mesh Thf = buildmesh(Gammaf1(sizef) + Gammaf2(sizef) + Gammaf3(sizef) + Gammafp(sizef));
+mesh Thp = buildmesh(Gammap1(sizep) + Gammap2(sizep) + Gammap3(sizep) + Gammafp(-sizep));
+
+mesh Shf = emptymesh(Thf);
+mesh Shp = emptymesh(Thp);
+
+//plot(Shf,wait=true);
+//               Gammaf^D   
+//           1-------------
+//           |            |
+//           |            |
+//  Gammaf^N |   Omegaf   |Gammaf^N
+//           |            |
+//           |            |         
+//           0------------1 Gammafp
+//           |            |
+//           |            |
+//  Gammap^N |   Omegap   |Gammap^N
+//           |            |
+//           |            |
+//          -1-------------
+//               Gammap^D
+
+//plot(Thf,Thp,wait=true);
+//---------------------------------------------------------------------------------
+// 						Finite element spaces
+//---------------------------------------------------------------------------------
+fespace QhTf(Thf,[BDM1,BDM1]);
+fespace Qhup(Thp,BDM1);
+fespace Qhsigp(Thp,[BDM1,BDM1]);
+fespace Qhpp(Thp,P0);
+
+fespace Shuf(Thf,[P0,P0]);
+fespace Shus(Thp,[P0,P0]);
+fespace Shgamf(Thf,P0);
+fespace Shgamp(Thp,P0);
+
+fespace Lhf(Shf,[P1dc,P1dc]);
+fespace Lhs(Shp,[P1dc,P1dc]);
+fespace Lhp(Shp,P1dc);
+fespace Auxf(Shf,[P1dc,P1dc]);
+fespace Auxp(Shp,P1dc);
+
+fespace Phf(Thf,P1);
+fespace Php(Thp,P1);
+//---------------------------------------------------------------------------------
+// 			      			Defining the bilinear forms 
+//---------------------------------------------------------------------------------
+QhTf Tfh;
+Qhup uph;
+Qhpp pph, pphold;
+Qhsigp sigph, sigphold;
+Shuf ufh,wfh;
+Shus ush;
+Shgamf gamfh;
+Shgamp gamph;
+Lhf vphih,wphih;
+Lhs thetah;
+Lhp lamh;
+
+real eps  = 1.e-12;
+real epsI = 1.e-12;
+//----- bilinear forms
+varf a1(Tfh,Rfh)     = int2d(Thf)( (dev(Tfh)'*dev(Rfh))/(2.*mu) - eps*(tr(Tfh)*tr(Rfh)) );
+varf a2(uph,vph)     = int2d(Thp)( mu*((Ki*uph)'*vph) );
+varf a3([pph],vph)   = int2d(Thp)( -(pph*div(vph)) );
+varf a4(uph,[qph])   = int2d(Thp)( qph*div(uph) );
+varf a5(sigph,tauph) = int2d(Thp)( (1./dt)*(A(sigph)'*tauph) );
+varf a6([pph],tauph) = int2d(Thp)( (alphap/dt)*(pph*trA(tauph)) );
+varf a7(sigph,[qph]) = int2d(Thp)( (alphap/dt)*(trA(sigph)*qph) );
+varf a8(pph,qph)     = int2d(Thp)( ((s0 + (alphap^2)*trAI)/dt)*(pph*qph) - eps*(pph*qph) );
+
+varf b1(vphih,Rfh)    = int1d(Thf,gammafp)( -(vphih'*([[Rfh[0],Rfh[1]],[Rfh[2],Rfh[3]]]*norm)) );
+varf b2(thetah,tauph) = int1d(Thp,gammafp)( -(thetah'*([[tauph[0],tauph[1]],[tauph[2],tauph[3]]]*norm)) );
+varf b3([lamh],vph)   = int1d(Thp,gammafp)( lamh*(vph'*norm) );
+
+varf c1(vphih,psih)  = int1d(Shf,gammafp)( -omi*(vphih'*tgt)*(psih'*tgt) - rhof*(vphih'*norm)*(wphih'*psih) - rhof*(wphih'*norm)*(vphih'*psih) ) + intalledges(Shf)( epsI*(vphih'*psih) );
+varf c2(thetah,psih) = int1d(Shf,gammafp)(  omi*(thetah'*tgt)*(psih'*tgt) );
+varf c3([lamh],psih) = int1d(Shf,gammafp)( -lamh*(psih'*norm) );
+varf c4(vphih,phih)  = int1d(Shp,gammafp)(  omi*(vphih'*tgt)*(phih'*tgt) );
+varf c5(thetah,phih) = int1d(Shp,gammafp)( -omi*(thetah'*tgt)*(phih'*tgt) ) + intalledges(Shp)( epsI*(thetah'*phih) );
+varf c6([lamh],phih) = int1d(Shp,gammafp)( -lamh*(phih'*norm) );
+varf c7(vphih,[xih]) = int1d(Shp,gammafp)( -xih*(vphih'*norm) );
+varf c8(thetah,[xih])= int1d(Shp,gammafp)( xih*(thetah'*norm) );
+varf penI(lamh,xih)  = intalledges(Shp)( epsI*(lamh*xih) );
+
+varf B1a(ufh,Rfh)      = int2d(Thf)( ufh'*Div(Rfh) + (rhof/(2.*mu))*((conv(ufh,wfh)+conv(wfh,ufh))'*Rfh) );
+varf B1b(Tfh,vfh)      = int2d(Thf)( vfh'*Div(Tfh) );
+varf B2(ush,tauph)     = int2d(Thp)( ush'*Div(tauph) );
+varf B3([gamfh],Rfh)   = int2d(Thf)( gamfh*(Rfh[1] - Rfh[2]) );
+varf B4([gamph],tauph) = int2d(Thp)( gamph*(tauph[1] - tauph[2]) );
+
+varf B5(auxfh,Rfh)     = int1d(Thf,gammafN)( -(auxfh'*([[Rfh[0],Rfh[1]],[Rfh[2],Rfh[3]]]*norm)) );
+varf B6([auxph],vph)   = int1d(Thp,gammapN)( auxph*(vph'*norm) );
+varf faux(auxfh,xaufh) = intalledges(Shf)( epsI*(auxfh'*xaufh) );
+varf paux(auxph,xauph) = intalledges(Shp)( epsI*(auxph*xauph) );
+
+//-----	RHS
+varf rhs1(Tfh,Rfh)     = int2d(Thf)( (rhof/(2.*mu))*(conv(wfh,wfh)'*Rfh) ) + int1d(Thf,gammafD)( uf'*([[Rfh[0],Rfh[1]],[Rfh[2],Rfh[3]]]*norm) );
+varf rhs2(uph,vph)     = int1d(Thp,gammapD)( -(pp*(vph'*norm)) );
+varf rhs3(sigph,tauph) = int2d(Thp)( (alphap/dt)*(pphold*trA(tauph)) + (A(sigphold)'*tauph)/dt ) + int1d(Thp,gammapD,gammapN)( us'*([[tauph[0],tauph[1]],[tauph[2],tauph[3]]]*norm) );
+varf rhs4(pph,qph)     = int2d(Thp)( (gp + ((s0 + (alphap^2)*trAI)/dt)*pphold + (alphap/dt)*trA(sigphold))*qph );
+varf rhs5(ufh,vfh)     = int2d(Thf)( -((Ff)'*vfh) );
+varf rhs6(ush,vsh)     = int2d(Thp)( -(Fp'*vsh) );
+varf bjs1(vphih,psih)  = int1d(Shf,gammafp)( -rhof*(wphih'*norm)*(wphih'*psih) ) + int1d(Thf,gammafp)( -(psih'*([[Tf[0],Tf[1]],[Tf[2],Tf[3]]]*norm + rhof*([[uf1*uf1,uf1*uf2],[uf2*uf1,uf2*uf2]]*norm) + omi*((uf-us)'*tgt)*tgt + pp*norm)) ) + intalledges(Shf)( epsI*(uf'*psih) );
+varf bjs2(thetah,phih) = int1d(Thp,gammafp)( -(phih'*([[sigp[0],sigp[1]],[sigp[2],sigp[3]]]*norm - omi*((uf-us)'*tgt)*tgt + pp*norm)) ) + intalledges(Shp)( epsI*(us'*phih) );
+varf lpen(lamh,xih)    = int1d(Thp,gammafp)( xih*((us + up - uf)'*norm) ) + intalledges(Shp)( epsI*(pp*xih) );
+varf lauxf(auxfh,xaufh) = int1d(Thf,gammafN)( -(xaufh'*([[Tf[0],Tf[1]],[Tf[2],Tf[3]]]*norm)) ) + intalledges(Shf)( epsI*(uf'*xaufh) );
+varf lauxp(auxph,xauph) = int1d(Thp,gammapN)( xauph*(up'*norm) ) + intalledges(Shp)( epsI*(pp*xauph) );
+//---------------------------------------------------------------------------------
+// 			      					Stiff matrix
+//---------------------------------------------------------------------------------
+matrix aa1 = a1(QhTf,QhTf);
+matrix aa2 = a2(Qhup,Qhup);
+matrix aa3 = a3(Qhpp,Qhup);
+matrix aa4 = a4(Qhup,Qhpp);
+matrix aa5 = a5(Qhsigp,Qhsigp);
+matrix aa6 = a6(Qhpp,Qhsigp);
+matrix aa7 = a7(Qhsigp,Qhpp);
+matrix aa8 = a8(Qhpp,Qhpp);
+
+matrix bb1 = b1(Lhf,QhTf);
+matrix bb2 = b2(Lhs,Qhsigp);
+matrix bb3 = b3(Lhp,Qhup);
+
+matrix cc2 = c2(Lhs,Lhf);
+matrix cc3 = c3(Lhp,Lhf);
+matrix cc4 = c4(Lhf,Lhs);
+matrix cc5 = c5(Lhs,Lhs);
+matrix cc6 = c6(Lhp,Lhs);
+matrix cc7 = c7(Lhf,Lhp);
+matrix cc8 = c8(Lhs,Lhp);
+matrix PENI = penI(Lhp,Lhp);
+
+matrix BB1b = B1b(QhTf,Shuf);
+matrix BB2 = B2(Shus,Qhsigp);
+matrix BB3 = B3(Shgamf,QhTf);
+matrix BB4 = B4(Shgamp,Qhsigp);
+matrix BB5 = B5(Auxf,QhTf);
+matrix PAF = faux(Auxf,Auxf);
+matrix BB6 = B6(Auxp,Qhup);
+matrix PAP = paux(Auxp,Auxp);
+
+//----- Initial condition
+t = 0.;   
+pphold = pp;
+sigphold = [sigp1,sigp2,sigp3,sigp4];
+
+real[int] sol1(QhTf.ndof), sol2(Qhup.ndof), sol3(Qhsigp.ndof), sol4(Qhpp.ndof); 
+real[int] sol5(Lhf.ndof), sol6(Lhs.ndof), sol7(Lhp.ndof);
+real[int] sol8(Shuf.ndof), sol9(Shus.ndof), sol10(Shgamf.ndof), sol11(Shgamp.ndof);
+real[int] sol12(Auxf.ndof), sol13(Auxp.ndof);
+
+Shus etaph;
+etaph = [0.,0.];
+
+wfh = [0.,0.];
+wphih = [0.,0.];
+
+for(int k = 0; k < NN; k++){  // loop in the number of time interval
+    t = t + dt;
+
+//----- RHS data change in time
+    real[int] RHS2 = rhs2(0,Qhup);
+    real[int] RHS3 = rhs3(0,Qhsigp);
+    real[int] RHS4 = rhs4(0,Qhpp);
+    real[int] BJS2 = bjs2(0,Lhs);
+    real[int] LPEN = lpen(0,Lhp);
+    real[int] RHS5 = rhs5(0,Shuf);
+    real[int] RHS6 = rhs6(0,Shus);
+    real[int] ZZ1(Shgamf.ndof); ZZ1 = 0.;
+    real[int] ZZ2(Shgamp.ndof); ZZ2 = 0.;
+    real[int] LAUXF = lauxf(0,Auxf);
+    real[int] LAUXP = lauxp(0,Auxp);
+
+    int itt = 0;
+    tol = 10.;
+    real[int] solt(QhTf.ndof+Qhup.ndof+Qhsigp.ndof+Qhpp.ndof+Lhf.ndof+Lhs.ndof+Lhp.ndof+Shuf.ndof+Shus.ndof+Shgamf.ndof+Shgamp.ndof+Auxf.ndof+Auxp.ndof); 
+    solt = 0.;
+
+//----- solving the nonlinear problem in each step of time
+    while((tol > 1e-6) && (itt < 30)){
+        itt = itt + 1.;	
+
+        real[int] RHS1 = rhs1(0,QhTf);   
+        real[int] BJS1 = bjs1(0,Lhf);     
+        real[int] L = [RHS1,RHS2,RHS3,RHS4,BJS1,BJS2,LPEN,RHS5,RHS6,ZZ1,ZZ2,LAUXF,LAUXP];
+
+        matrix BB1a = B1a(Shuf,QhTf);    
+        matrix cc1  = c1(Lhf,Lhf);
+        matrix M;{
+        M = [[  aa1,    0,    0,   0,  bb1,   0,    0, BB1a,   0, BB3,   0, BB5,   0],
+	         [    0,  aa2,    0, aa3,    0,   0,  bb3,    0,   0,   0,   0,   0, BB6],
+	         [    0,    0,  aa5, aa6,    0, bb2,    0,    0, BB2,   0, BB4,   0,   0],
+             [    0,  aa4,  aa7, aa8,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+             [ bb1',    0,    0,   0,  cc1, cc2,  cc3,    0,   0,   0,   0,   0,   0],
+             [    0,    0, bb2',   0,  cc4, cc5,  cc6,    0,   0,   0,   0,   0,   0],
+             [    0, bb3',    0,   0,  cc7, cc8, PENI,    0,   0,   0,   0,   0,   0],
+             [ BB1b,    0,    0,   0,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+             [    0,    0, BB2',   0,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+             [ BB3',    0,    0,   0,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+             [    0,    0, BB4',   0,    0,   0,    0,    0,   0,   0,   0,   0,   0],
+             [ BB5',    0,    0,   0,    0,   0,    0,    0,   0,   0,   0, PAF,   0],
+             [    0, BB6',    0,   0,    0,   0,    0,    0,   0,   0,   0,   0, PAP]];}
+
+        set(M,solver = sparsesolver);
+        real[int] sol = M^-1*L;
+
+        real adof = QhTf.ndof+Qhup.ndof+Qhsigp.ndof+Qhpp.ndof+Lhf.ndof+Lhs.ndof+Lhp.ndof;
+        real bdof = QhTf.ndof+Qhup.ndof+Qhsigp.ndof+Qhpp.ndof;
+        wfh1[]   = sol(adof:adof + Shuf.ndof-1);
+        wphih1[] = sol(bdof:bdof + Lhf.ndof-1);
+
+//----- computing tol
+        real[int] diff = sol - solt;   
+        tol = sqrt(diff'*diff)/sqrt(sol'*sol);
+	    cout << " tolerance = " << tol << endl;
+
+//----- updating data for the next step 
+	    solt  = sol;
+    }
+    auxitt[k] = itt;
+
+//----- Approximation of the solution
+    [sol1,sol2,sol3,sol4,sol5,sol6,sol7,sol8,sol9,sol10,sol11,sol12,sol13] = solt;
+
+    Tfh1[]   = sol1;
+    uph1[]   = sol2;
+    sigph1[] = sol3;
+    pph[]    = sol4;
+    vphih1[] = sol5;
+    thetah1[]= sol6;
+    lamh[]   = sol7;
+    ufh1[]   = sol8;
+    ush1[]   = sol9;
+    gamfh[]  = sol10;
+    gamph[]  = sol11;
+
+    etaph1[] = dt*ush1[] + etaph1[];
+
+//----- calculating the errors
+    Tferror[n]   += int2d(Thf)( (Tf - Tfh)'*(Tf - Tfh) ) + pow(int2d(Thf)( pow((DivTf - Div(Tfh))'*(DivTf - Div(Tfh)),2./3.) ),3./2.);
+    uferror[n]   += pow(int2d(Thf)( pow((uf - ufh)'*(uf - ufh),2.) ),1./2.);
+    eauxuf[k]     = sqrt(int2d(Thf)( (uf - ufh)'*(uf - ufh) ));
+    gamferror[n] += int2d(Thf)( 2.*square(gamf - gamfh) );
+    pferror[n]   += int2d(Thf)( square(pf - pfh(Tfh,ufh)) );
+
+    eauxsigp[k]   = sqrt(int2d(Thp)( (sigp - sigph)'*(sigp - sigph) + (Fp + Div(sigph))'*(Fp + Div(sigph)) ));
+    uperror[n]   += int2d(Thp)( (up - uph)'*(up - uph) + square(divup - div(uph)) );
+    eauxpp[k]     = sqrt(int2d(Thp)( square(pp - pph) ));
+    userror[n]   += int2d(Thp)( (us - ush)'*(us - ush) );
+    gamperror[n] += int2d(Thp)( 2.*square(gamp - gamph) );
+    etaperror[n] += int2d(Thp)( (etap - etaph)'*(etap - etaph) );
+
+    vphierror[n]  += int1d(Shf,gammafp)( (uf - vphih)'*(uf - vphih) );
+    thetaerror[n] += int1d(Shp,gammafp)( (us - thetah)'*(us - thetah) );
+    lamerror[n]   += int1d(Shp,gammafp)( square(pp - lamh) );
+
+//----- updating RHS
+    pphold = pph;
+    sigphold = [sigph1,sigph2,sigph3,sigph4];
+}
+iterations[n] = (auxitt.sum)/NN;
+
+Tferror[n]   = sqrt(dt*Tferror[n]);
+uferror[n]   = sqrt(dt*uferror[n]);
+ufinferror[n]= eauxuf.max;
+gamferror[n] = sqrt(dt*gamferror[n]);
+pferror[n]   = sqrt(dt*pferror[n]);
+
+sigperror[n] = eauxsigp.max;
+uperror[n]   = sqrt(dt*uperror[n]);
+pperror[n]   = eauxpp.max;   
+userror[n]   = sqrt(dt*userror[n]);  
+etaperror[n] = sqrt(dt*etaperror[n]);  
+gamperror[n] = sqrt(dt*gamperror[n]);
+
+vphierror[n] = sqrt(dt*vphierror[n]);
+thetaerror[n] = sqrt(dt*thetaerror[n]);
+lamerror[n] = sqrt(dt*lamerror[n]);    
+
+//----- for the meshsize in Omega
+Phf hf = hTriangle;
+hF[n]  = hf[].max;
+
+Php hp = hTriangle;
+hP[n]  = hp[].max;
+
+htf[n] = 1.0 / sizef;
+htp[n] = 1.0 / sizep;
+
+DOFf[n] = QhTf.ndof + Shuf.ndof + Shgamf.ndof + Lhf.ndof;
+DOFp[n] = Qhsigp.ndof + Qhup.ndof + Qhpp.ndof + Shus.ndof + Shgamp.ndof + Lhs.ndof + Lhp.ndof;
+
+//----- exporting to Praraview
+/*savevtk("Data_Paraview_2D/NavierStokes_aprox"+n+".vtk",Thf,[Tfh1,Tfh2,0],[Tfh3,Tfh4,0],[ufh1,ufh2,0],gamfh,pfh(Tfh,ufh),dataname="Tfh1 Tfh2 ufh gamfh pfh");
+savevtk("Data_Paraview_2D/Biot_approx"+n+".vtk",Thp,[sigph1,sigph2,0],[sigph3,sigph4,0],[uph1,uph2,0],[ush1,ush2,0],gamph,pph,dataname="sigph1 sigph2 uph ush gamph pph");
+savevtk("Data_Paraview_2D/NavierStokes_exact"+n+".vtk",Thf,[Tf1,Tf2,0],[Tf3,Tf4,0],[uf1,uf2,0],gamf,pf,dataname="Tf1 Tf2 uf gamf pf");
+savevtk("Data_Paraview_2D/Biot_exact"+n+".vtk",Thp,[sigp1,sigp2,0],[sigp3,sigp4,0],[up1,up2,0],[us1,us2,0],gamp,pp,dataname="sigp1 sigp2 up us gamp pp");
+*/
+}
+//---------------------------------------------------------------------------------
+// 			      				showing the tables
+//---------------------------------------------------------------------------------
+cout << " Tferror = " << Tferror <<endl;
+for(int n = 1; n < nref; n++)
+Tfrate[n-1] = log(Tferror[n-1]/Tferror[n]) / log(hF[n-1]/hF[n]);
+cout <<" convergence rate Tf = "<< Tfrate <<endl;
+
+cout << " uferror = " << uferror <<endl;
+for(int n = 1; n < nref; n++)
+ufrate[n-1] = log(uferror[n-1]/uferror[n]) / log(hF[n-1]/hF[n]);
+cout << " convergence rate uf = " << ufrate <<endl;
+
+cout << " uf Linf-error = " << ufinferror <<endl;
+for(int n = 1; n < nref; n++)
+ufinfrate[n-1] = log(ufinferror[n-1]/ufinferror[n]) / log(hF[n-1]/hF[n]);
+cout << " convergence rate uf in Linf = " << ufinfrate <<endl;
+
+cout << " gamferror = " << gamferror <<endl;
+for(int n = 1; n < nref; n++)
+gamfrate[n-1] = log(gamferror[n-1]/gamferror[n]) / log(hF[n-1]/hF[n]);
+cout << " convergence rate gamf = " << gamfrate <<endl;
+
+cout << " pferror = " << pferror <<endl;
+for(int n = 1; n < nref; n++)
+pfrate[n-1] = log(pferror[n-1]/pferror[n]) / log(hF[n-1]/hF[n]);
+cout << " convergence rate pf = " << pfrate <<endl;
+//
+cout << " sigperror = " << sigperror <<endl;
+for(int n = 1; n < nref; n++)
+sigprate[n-1] = log(sigperror[n-1]/sigperror[n]) / log(hP[n-1]/hP[n]);
+cout << " convergence rate sigp = " << sigprate <<endl;
+
+cout << " userror = " << userror <<endl;
+for(int n = 1; n < nref; n++)
+usrate[n-1] = log(userror[n-1]/userror[n]) / log(hP[n-1]/hP[n]);
+cout << " convergence rate us = " << usrate <<endl;
+
+cout << " etap error = " << etaperror <<endl;
+for(int n = 1; n < nref; n++)
+etaprate[n-1] = log(etaperror[n-1]/etaperror[n]) / log(hP[n-1]/hP[n]);
+cout << " convergence rate etap = " << etaprate <<endl;
+
+cout << " gamperror = " << gamperror <<endl;
+for(int n = 1; n < nref; n++)
+gamprate[n-1] = log(gamperror[n-1]/gamperror[n]) / log(hP[n-1]/hP[n]);
+cout << " convergence rate gamp = " << gamprate <<endl;
+
+cout << " uperror = " << uperror <<endl;
+for(int n = 1; n < nref; n++)
+uprate[n-1] = log(uperror[n-1]/uperror[n]) / log(hP[n-1]/hP[n]);
+cout << " convergence rate up = " << uprate <<endl;
+
+cout << " pperror = " << pperror <<endl;
+for(int n = 1; n < nref; n++)
+pprate[n-1] = log(pperror[n-1]/pperror[n]) / log(hP[n-1]/hP[n]);
+cout << " convergence rate pp = " << pprate <<endl;
+
+cout << " vphierror in L2 = " << vphierror <<endl;
+for(int n = 1; n < nref; n++)
+vphirate[n-1] = log(vphierror[n-1]/vphierror[n]) / log(htf[n-1]/htf[n]);
+cout << " convergence rate vphi in L2 = " << vphirate <<endl;
+
+cout << " thetaerror in L2 = " << thetaerror <<endl;
+for(int n = 1; n < nref; n++)
+thetarate[n-1] = log(thetaerror[n-1]/thetaerror[n]) / log(htp[n-1]/htp[n]);
+cout << " convergence rate theta in L2 = " << thetarate <<endl;
+
+cout << " lamerror in L2 = " << lamerror <<endl;
+for(int n = 1; n < nref; n++)
+lamrate[n-1] = log(lamerror[n-1]/lamerror[n]) / log(htp[n-1]/htp[n]);
+cout << " convergence rate lam in L2 = " << lamrate <<endl;
+
+cout << " mesh size Of = " << hF <<endl;
+cout << " mesh size Op = " << hP <<endl;
+cout << " mesh size Gammafp in Of = " << htf <<endl;
+cout << " mesh size Gammafp in Op = " << htp <<endl;
+cout << " degrees of freedom Of = " << DOFf <<endl;
+cout << " degrees of freedom Op = " << DOFp <<endl;
+cout << " Newton iterations = " << iterations <<endl;
